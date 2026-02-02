@@ -1,0 +1,67 @@
+/**
+ * @file zmq_connector.hpp
+ * @brief ZeroMQ-based E3 Connector
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#ifndef LIBE3_ZMQ_CONNECTOR_HPP
+#define LIBE3_ZMQ_CONNECTOR_HPP
+
+#include "libe3/e3_connector.hpp"
+#include <memory>
+
+namespace libe3 {
+
+/**
+ * @brief ZeroMQ-based E3 connector
+ *
+ * Provides transport using ZeroMQ sockets. Supports TCP and IPC transports.
+ * Ported from the original C implementation's zeromq_* functions.
+ */
+class ZmqE3Connector : public E3Connector {
+public:
+    ZmqE3Connector(
+        TransportType transport,
+        const std::string& setup_endpoint,
+        const std::string& inbound_endpoint,
+        const std::string& outbound_endpoint,
+        size_t io_threads
+    );
+    
+    ~ZmqE3Connector() override;
+
+    [[nodiscard]] ErrorCode setup_initial_connection() override;
+    [[nodiscard]] int recv_setup_request(std::vector<uint8_t>& buffer) override;
+    [[nodiscard]] ErrorCode send_response(const std::vector<uint8_t>& data) override;
+    [[nodiscard]] ErrorCode setup_inbound_connection() override;
+    [[nodiscard]] int receive(std::vector<uint8_t>& buffer) override;
+    [[nodiscard]] ErrorCode setup_outbound_connection() override;
+    [[nodiscard]] ErrorCode send(const std::vector<uint8_t>& data) override;
+    void dispose() override;
+    
+    [[nodiscard]] TransportType transport_type() const noexcept override {
+        return transport_type_;
+    }
+    
+    [[nodiscard]] bool is_connected() const noexcept override {
+        return connected_;
+    }
+
+private:
+    TransportType transport_type_;
+    size_t io_threads_;
+    
+    void* context_{nullptr};
+    void* setup_socket_{nullptr};
+    void* inbound_socket_{nullptr};
+    void* outbound_socket_{nullptr};
+    
+    bool connected_{false};
+    
+    void setup_ipc_permissions(const std::string& path);
+};
+
+} // namespace libe3
+
+#endif // LIBE3_ZMQ_CONNECTOR_HPP

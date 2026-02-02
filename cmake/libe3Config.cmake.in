@@ -1,0 +1,16 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(Threads REQUIRED)
+
+if(@LIBE3_ENABLE_ZMQ@)
+    find_dependency(PkgConfig)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(ZMQ IMPORTED_TARGET libzmq)
+    endif()
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/libe3Targets.cmake")
+
+check_required_components(libe3)

@@ -1,0 +1,176 @@
+/**
+ * @file e3_encoder.hpp
+ * @brief Abstract E3 Encoder interface for PDU encoding/decoding
+ *
+ * Defines the abstract interface for encoding and decoding E3AP PDUs.
+ * Ported from the original C implementation's e3ap_handler functions.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#ifndef LIBE3_E3_ENCODER_HPP
+#define LIBE3_E3_ENCODER_HPP
+
+#include "types.hpp"
+#include <memory>
+#include <optional>
+#include <expected>
+
+namespace libe3 {
+
+/**
+ * @brief Result type for encoding/decoding operations
+ */
+template<typename T>
+using EncodeResult = std::expected<T, ErrorCode>;
+
+/**
+ * @brief Abstract base class for E3AP encoders
+ *
+ * This class defines the interface for encoding and decoding E3AP PDUs.
+ * The design allows for multiple encoding formats (ASN.1, JSON) while
+ * maintaining the same API.
+ *
+ * Derived classes:
+ * - ASN1E3Encoder: ASN.1 PER encoding (O-RAN standard)
+ * - JsonE3Encoder: JSON encoding (for development/debugging)
+ */
+class E3Encoder {
+public:
+    virtual ~E3Encoder() = default;
+
+    // Non-copyable, movable
+    E3Encoder(const E3Encoder&) = delete;
+    E3Encoder& operator=(const E3Encoder&) = delete;
+    E3Encoder(E3Encoder&&) = default;
+    E3Encoder& operator=(E3Encoder&&) = default;
+
+    /**
+     * @brief Encode a PDU to bytes
+     * @param pdu PDU to encode
+     * @return Encoded message on success, error code on failure
+     */
+    [[nodiscard]] virtual EncodeResult<EncodedMessage> encode(const Pdu& pdu) = 0;
+
+    /**
+     * @brief Decode bytes to a PDU
+     * @param encoded Encoded message to decode
+     * @return Decoded PDU on success, error code on failure
+     */
+    [[nodiscard]] virtual EncodeResult<Pdu> decode(const EncodedMessage& encoded) = 0;
+
+    /**
+     * @brief Decode bytes to a PDU
+     * @param data Raw data buffer
+     * @param size Size of data
+     * @return Decoded PDU on success, error code on failure
+     */
+    [[nodiscard]] virtual EncodeResult<Pdu> decode(const uint8_t* data, size_t size) = 0;
+
+    /**
+     * @brief Get the encoding format
+     */
+    [[nodiscard]] virtual EncodingFormat format() const noexcept = 0;
+
+    // Convenience methods for creating specific PDUs
+
+    /**
+     * @brief Create and encode a Setup Request PDU
+     */
+    [[nodiscard]] EncodeResult<EncodedMessage> encode_setup_request(
+        uint32_t dapp_identifier,
+        const std::vector<uint32_t>& ran_function_list,
+        ActionType action_type
+    );
+
+    /**
+     * @brief Create and encode a Setup Response PDU
+     */
+    [[nodiscard]] EncodeResult<EncodedMessage> encode_setup_response(
+        uint32_t request_id,
+        ResponseCode response_code,
+        const std::vector<uint32_t>& ran_function_list
+    );
+
+    /**
+     * @brief Create and encode a Subscription Request PDU
+     */
+    [[nodiscard]] EncodeResult<EncodedMessage> encode_subscription_request(
+        uint32_t dapp_identifier,
+        ActionType action_type,
+        uint32_t ran_function_identifier
+    );
+
+    /**
+     * @brief Create and encode a Subscription Response PDU
+     */
+    [[nodiscard]] EncodeResult<EncodedMessage> encode_subscription_response(
+        uint32_t request_id,
+        ResponseCode response_code
+    );
+
+    /**
+     * @brief Create and encode an Indication Message PDU
+     */
+    [[nodiscard]] EncodeResult<EncodedMessage> encode_indication_message(
+        uint32_t dapp_identifier,
+        const std::vector<uint8_t>& protocol_data
+    );
+
+    /**
+     * @brief Create and encode a Control Action PDU
+     */
+    [[nodiscard]] EncodeResult<EncodedMessage> encode_control_action(
+        uint32_t dapp_identifier,
+        uint32_t ran_function_identifier,
+        const std::vector<uint8_t>& action_data
+    );
+
+    /**
+     * @brief Create and encode a dApp Report PDU
+     */
+    [[nodiscard]] EncodeResult<EncodedMessage> encode_dapp_report(
+        uint32_t dapp_identifier,
+        uint32_t ran_function_identifier,
+        const std::vector<uint8_t>& report_data
+    );
+
+    /**
+     * @brief Create and encode an xApp Control Action PDU
+     */
+    [[nodiscard]] EncodeResult<EncodedMessage> encode_xapp_control_action(
+        uint32_t dapp_identifier,
+        uint32_t ran_function_identifier,
+        const std::vector<uint8_t>& xapp_control_data
+    );
+
+    /**
+     * @brief Create and encode a Message Acknowledgment PDU
+     */
+    [[nodiscard]] EncodeResult<EncodedMessage> encode_message_ack(
+        uint32_t request_id,
+        ResponseCode response_code
+    );
+
+protected:
+    E3Encoder() = default;
+
+    /**
+     * @brief Generate unique message ID
+     */
+    [[nodiscard]] static uint32_t generate_message_id();
+};
+
+/**
+ * @brief Factory function to create appropriate encoder
+ *
+ * Creates an encoder instance based on the encoding format specified.
+ *
+ * @param format Encoding format to use
+ * @return Unique pointer to created encoder, nullptr on failure
+ */
+[[nodiscard]] std::unique_ptr<E3Encoder> create_encoder(EncodingFormat format);
+
+} // namespace libe3
+
+#endif // LIBE3_E3_ENCODER_HPP

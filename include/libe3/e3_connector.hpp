@@ -1,0 +1,156 @@
+/**
+ * @file e3_connector.hpp
+ * @brief Abstract E3 Connector interface for transport layer
+ *
+ * Defines the abstract interface that all transport connectors must implement.
+ * Ported from the original C implementation's E3Connector structure.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#ifndef LIBE3_E3_CONNECTOR_HPP
+#define LIBE3_E3_CONNECTOR_HPP
+
+#include "types.hpp"
+#include <memory>
+#include <string>
+#include <functional>
+
+namespace libe3 {
+
+/**
+ * @brief Abstract base class for E3AP transport connectors
+ *
+ * This class defines the transport-agnostic interface that all connectors
+ * must implement. The design mirrors the original C implementation's
+ * function pointer approach, but uses virtual methods for type safety.
+ *
+ * Derived classes:
+ * - PosixE3Connector: POSIX socket-based transport (TCP, SCTP, IPC)
+ * - ZmqE3Connector: ZeroMQ-based transport
+ */
+class E3Connector {
+public:
+    virtual ~E3Connector() = default;
+
+    // Non-copyable, movable
+    E3Connector(const E3Connector&) = delete;
+    E3Connector& operator=(const E3Connector&) = delete;
+    E3Connector(E3Connector&&) = default;
+    E3Connector& operator=(E3Connector&&) = default;
+
+    /**
+     * @brief Set up the initial connection (setup channel)
+     *
+     * This establishes the REQ/REP channel used for E3 Setup procedures.
+     * @return ErrorCode::SUCCESS on success, error code otherwise
+     */
+    [[nodiscard]] virtual ErrorCode setup_initial_connection() = 0;
+
+    /**
+     * @brief Receive a setup request
+     *
+     * Blocks until a setup request is received on the setup channel.
+     * @param buffer Buffer to store received data
+     * @return Number of bytes received, or negative error code
+     */
+    [[nodiscard]] virtual int recv_setup_request(std::vector<uint8_t>& buffer) = 0;
+
+    /**
+     * @brief Send a setup response
+     * @param data Response data to send
+     * @return ErrorCode::SUCCESS on success, error code otherwise
+     */
+    [[nodiscard]] virtual ErrorCode send_response(const std::vector<uint8_t>& data) = 0;
+
+    /**
+     * @brief Set up the inbound connection (SUB channel)
+     *
+     * This establishes the channel for receiving control actions from dApps.
+     * @return ErrorCode::SUCCESS on success, error code otherwise
+     */
+    [[nodiscard]] virtual ErrorCode setup_inbound_connection() = 0;
+
+    /**
+     * @brief Receive data from the inbound channel
+     * @param buffer Buffer to store received data
+     * @return Number of bytes received, or negative error code
+     */
+    [[nodiscard]] virtual int receive(std::vector<uint8_t>& buffer) = 0;
+
+    /**
+     * @brief Set up the outbound connection (PUB channel)
+     *
+     * This establishes the channel for sending indications to dApps.
+     * @return ErrorCode::SUCCESS on success, error code otherwise
+     */
+    [[nodiscard]] virtual ErrorCode setup_outbound_connection() = 0;
+
+    /**
+     * @brief Send data on the outbound channel
+     * @param data Data to send
+     * @return ErrorCode::SUCCESS on success, error code otherwise
+     */
+    [[nodiscard]] virtual ErrorCode send(const std::vector<uint8_t>& data) = 0;
+
+    /**
+     * @brief Clean up and release all resources
+     */
+    virtual void dispose() = 0;
+
+    /**
+     * @brief Get the transport type
+     */
+    [[nodiscard]] virtual TransportType transport_type() const noexcept = 0;
+
+    /**
+     * @brief Check if connector is connected
+     */
+    [[nodiscard]] virtual bool is_connected() const noexcept = 0;
+
+    /**
+     * @brief Get setup endpoint
+     */
+    [[nodiscard]] const std::string& setup_endpoint() const noexcept { return setup_endpoint_; }
+
+    /**
+     * @brief Get inbound endpoint
+     */
+    [[nodiscard]] const std::string& inbound_endpoint() const noexcept { return inbound_endpoint_; }
+
+    /**
+     * @brief Get outbound endpoint
+     */
+    [[nodiscard]] const std::string& outbound_endpoint() const noexcept { return outbound_endpoint_; }
+
+protected:
+    E3Connector() = default;
+    
+    std::string setup_endpoint_;
+    std::string inbound_endpoint_;
+    std::string outbound_endpoint_;
+};
+
+/**
+ * @brief Factory function to create appropriate connector
+ *
+ * Creates a connector instance based on the transport type specified.
+ *
+ * @param transport Transport type to use
+ * @param setup_endpoint Endpoint for setup channel
+ * @param inbound_endpoint Endpoint for inbound channel
+ * @param outbound_endpoint Endpoint for outbound channel
+ * @param io_threads Number of I/O threads (for ZMQ)
+ * @return Unique pointer to created connector, nullptr on failure
+ */
+[[nodiscard]] std::unique_ptr<E3Connector> create_connector(
+    TransportType transport,
+    const std::string& setup_endpoint,
+    const std::string& inbound_endpoint,
+    const std::string& outbound_endpoint,
+    size_t io_threads = 2
+);
+
+} // namespace libe3
+
+#endif // LIBE3_E3_CONNECTOR_HPP

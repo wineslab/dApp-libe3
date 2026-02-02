@@ -1,0 +1,451 @@
+/**
+ * @file types.hpp
+ * @brief E3AP Protocol Types - Vendor-neutral type definitions
+ *
+ * This header defines all E3AP protocol types and structures used throughout
+ * the libe3 library. These types are designed to be RAN-agnostic and can be
+ * used by any RAN vendor integrating with the E3AP protocol.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#ifndef LIBE3_TYPES_HPP
+#define LIBE3_TYPES_HPP
+
+#include <cstdint>
+#include <cstddef>
+#include <string>
+#include <vector>
+#include <variant>
+#include <optional>
+#include <chrono>
+#include <memory>
+
+namespace libe3 {
+
+/**
+ * @brief E3AP encoding formats supported by the library
+ */
+enum class EncodingFormat : uint8_t {
+    ASN1 = 0,   ///< ASN.1 PER encoding (standard O-RAN format)
+    JSON = 1    ///< JSON encoding (for development/debugging)
+};
+
+/**
+ * @brief Transport protocol types
+ */
+enum class TransportType : uint8_t {
+    POSIX = 0,       ///< POSIX sockets (generic, uses TCP by default)
+    POSIX_TCP = 1,   ///< POSIX TCP sockets
+    POSIX_SCTP = 2,  ///< POSIX SCTP sockets (O-RAN standard)
+    POSIX_IPC = 3,   ///< POSIX Unix Domain Sockets
+    ZMQ = 10,        ///< ZeroMQ (generic, uses IPC by default)
+    ZMQ_TCP = 11,    ///< ZeroMQ over TCP
+    ZMQ_IPC = 12     ///< ZeroMQ over IPC
+};
+
+/**
+ * @brief E3AP action types for Setup and Subscription requests
+ */
+enum class ActionType : uint8_t {
+    INSERT = 0,    ///< Insert/create new entry
+    UPDATE = 1,    ///< Update existing entry
+    DELETE = 2     ///< Delete existing entry
+};
+
+/**
+ * @brief E3AP response codes
+ */
+enum class ResponseCode : uint8_t {
+    POSITIVE = 0,  ///< Request accepted
+    NEGATIVE = 1   ///< Request rejected
+};
+
+/**
+ * @brief E3AP PDU types
+ */
+enum class PduType : uint8_t {
+    SETUP_REQUEST = 0,
+    SETUP_RESPONSE = 1,
+    SUBSCRIPTION_REQUEST = 2,
+    SUBSCRIPTION_RESPONSE = 3,
+    INDICATION_MESSAGE = 4,
+    CONTROL_ACTION = 5,
+    DAPP_REPORT = 6,
+    XAPP_CONTROL_ACTION = 7,
+    MESSAGE_ACK = 8
+};
+
+/**
+ * @brief Agent state machine states
+ */
+enum class AgentState : uint8_t {
+    UNINITIALIZED = 0,  ///< Agent not yet initialized
+    INITIALIZED = 1,    ///< Agent initialized but not connected
+    CONNECTING = 2,     ///< Connection in progress
+    CONNECTED = 3,      ///< Connected and ready for operations
+    RUNNING = 4,        ///< Main processing loop active
+    STOPPING = 5,       ///< Shutdown in progress
+    STOPPED = 6,        ///< Agent fully stopped
+    ERROR = 7           ///< Error state
+};
+
+/**
+ * @brief Error codes returned by libe3 operations
+ */
+enum class ErrorCode : int {
+    SUCCESS = 0,
+    INVALID_PARAM = -1,
+    NOT_INITIALIZED = -2,
+    ALREADY_INITIALIZED = -3,
+    NOT_CONNECTED = -4,
+    CONNECTION_FAILED = -5,
+    TIMEOUT = -6,
+    ENCODE_FAILED = -7,
+    DECODE_FAILED = -8,
+    SM_NOT_FOUND = -9,
+    SM_ALREADY_REGISTERED = -10,
+    BUFFER_TOO_SMALL = -11,
+    INTERNAL_ERROR = -12,
+    SUBSCRIPTION_EXISTS = -13,
+    SUBSCRIPTION_NOT_FOUND = -14,
+    DAPP_NOT_REGISTERED = -15,
+    TRANSPORT_ERROR = -16,
+    STATE_ERROR = -17,
+    SM_START_FAILED = -18,
+    NOT_FOUND = -19,
+    GENERIC_ERROR = -100
+};
+
+// Maximum sizes for E3AP data fields (aligned with original C implementation)
+constexpr size_t MAX_PROTOCOL_DATA_SIZE = 32768;
+constexpr size_t MAX_ACTION_DATA_SIZE = 32768;
+constexpr size_t MAX_DAPP_REPORT_DATA_SIZE = 32768;
+constexpr size_t MAX_XAPP_CTRL_DATA_SIZE = 32768;
+constexpr size_t MAX_RAN_FUNCTIONS = 255;
+constexpr size_t DEFAULT_BUFFER_SIZE = 60000;
+
+// Protocol version
+constexpr uint32_t LIBE3_PROTOCOL_VERSION = 1;
+
+/**
+ * @brief E3AP Setup result
+ */
+enum class SetupResult : uint8_t {
+    SUCCESS = 0,
+    FAILURE = 1
+};
+
+/**
+ * @brief Encoded message wrapper
+ *
+ * Unified wrapper for encoded data regardless of format used.
+ */
+struct EncodedMessage {
+    std::vector<uint8_t> buffer;  ///< Encoded data buffer
+    EncodingFormat format;        ///< Format used for encoding
+
+    EncodedMessage() = default;
+    EncodedMessage(std::vector<uint8_t> buf, EncodingFormat fmt)
+        : buffer(std::move(buf)), format(fmt) {}
+    
+    [[nodiscard]] size_t size() const noexcept { return buffer.size(); }
+    [[nodiscard]] bool empty() const noexcept { return buffer.empty(); }
+    [[nodiscard]] const uint8_t* data() const noexcept { return buffer.data(); }
+    [[nodiscard]] uint8_t* data() noexcept { return buffer.data(); }
+};
+
+/**
+ * @brief RAN Function definition (SM identification)
+ */
+struct RanFunctionDefinition {
+    uint32_t ran_function_id{0};
+    std::string sm_name;
+    std::string sm_version;
+};
+
+/**
+ * @brief E3AP Setup Request structure
+ */
+struct SetupRequest {
+    std::string ran_identifier;
+    uint32_t protocol_version{LIBE3_PROTOCOL_VERSION};
+    std::vector<RanFunctionDefinition> ran_functions;
+};
+
+/**
+ * @brief E3AP Setup Response structure
+ */
+struct SetupResponse {
+    SetupResult result{SetupResult::FAILURE};
+    std::vector<uint32_t> accepted_ran_functions;
+    std::vector<uint32_t> rejected_ran_functions;
+    std::string message;
+};
+
+/**
+ * @brief E3AP Subscription Request structure
+ */
+struct SubscriptionRequest {
+    uint32_t dapp_identifier{0};
+    std::vector<uint32_t> ran_functions_to_subscribe;
+    std::vector<uint32_t> ran_functions_to_unsubscribe;
+};
+
+/**
+ * @brief E3AP Subscription Response structure
+ */
+struct SubscriptionResponse {
+    uint32_t dapp_identifier{0};
+    std::vector<uint32_t> accepted_ran_functions;
+    std::vector<uint32_t> rejected_ran_functions;
+};
+
+/**
+ * @brief E3AP Indication Message structure
+ */
+struct IndicationMessage {
+    uint32_t dapp_identifier{0};
+    std::vector<uint8_t> protocol_data;
+};
+
+/**
+ * @brief E3AP Control Action structure
+ */
+struct ControlAction {
+    uint32_t dapp_identifier{0};
+    uint32_t ran_function_identifier{0};
+    std::vector<uint8_t> action_data;
+};
+
+/**
+ * @brief E3AP Message Acknowledgment structure
+ */
+struct MessageAck {
+    uint32_t original_message_id{0};
+    ErrorCode result{ErrorCode::SUCCESS};
+    std::string message;
+};
+
+/**
+ * @brief E3AP dApp Report structure
+ */
+struct DAppReport {
+    uint32_t dapp_identifier{0};
+    uint32_t ran_function_identifier{0};
+    std::vector<uint8_t> report_data;
+};
+
+/**
+ * @brief E3AP xApp Control Action structure
+ */
+struct XAppControlAction {
+    uint32_t dapp_identifier{0};
+    uint32_t ran_function_identifier{0};
+    std::vector<uint8_t> xapp_control_data;
+};
+
+/**
+ * @brief Generic E3AP PDU using std::variant for type-safe union
+ */
+using PduChoice = std::variant<
+    SetupRequest,
+    SetupResponse,
+    SubscriptionRequest,
+    SubscriptionResponse,
+    IndicationMessage,
+    ControlAction,
+    DAppReport,
+    XAppControlAction,
+    MessageAck
+>;
+
+/**
+ * @brief Generic E3AP PDU structure
+ */
+struct Pdu {
+    PduType type{PduType::SETUP_REQUEST};
+    PduChoice choice;
+    uint32_t message_id{0};        ///< Unique message identifier
+    uint64_t timestamp{0};         ///< Message timestamp (milliseconds since epoch)
+
+    Pdu() : timestamp(static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()
+        ).count())) {}
+    
+    explicit Pdu(PduType t) : type(t), timestamp(static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()
+        ).count())) {}
+    
+    template<typename T>
+    Pdu(PduType t, T&& data) : type(t), choice(std::forward<T>(data)),
+        timestamp(static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()
+            ).count())) {}
+
+    /**
+     * @brief Get PDU data with type checking
+     */
+    template<typename T>
+    [[nodiscard]] T* get_if() noexcept {
+        return std::get_if<T>(&choice);
+    }
+
+    template<typename T>
+    [[nodiscard]] const T* get_if() const noexcept {
+        return std::get_if<T>(&choice);
+    }
+};
+
+/**
+ * @brief Configuration for E3Agent
+ */
+struct E3Config {
+    // RAN identification
+    std::string ran_identifier;
+    
+    // Transport configuration
+    TransportType transport{TransportType::POSIX};
+    std::string setup_endpoint{"ipc:///tmp/dapps/setup"};
+    std::string subscriber_endpoint{"ipc:///tmp/dapps/dapp_socket"};
+    std::string publisher_endpoint{"ipc:///tmp/dapps/e3_socket"};
+    
+    // Encoding format
+    EncodingFormat encoding{EncodingFormat::JSON};
+    
+    // Timeouts (milliseconds)
+    uint32_t connect_timeout_ms{5000};
+    uint32_t recv_timeout_ms{1000};
+    uint32_t send_timeout_ms{1000};
+    
+    // Buffer sizes
+    size_t receive_buffer_size{DEFAULT_BUFFER_SIZE};
+    size_t send_buffer_size{DEFAULT_BUFFER_SIZE};
+    
+    // Simulation mode (for testing without real RAN)
+    bool simulation_mode{false};
+    
+    // Threading
+    size_t io_threads{2};
+    
+    // Logging level (0=none, 1=error, 2=warn, 3=info, 4=debug, 5=trace)
+    int log_level{3};
+};
+
+/**
+ * @brief Timestamp type using steady_clock for monotonic time
+ */
+using Timestamp = std::chrono::time_point<std::chrono::steady_clock>;
+
+/**
+ * @brief dApp registration entry
+ */
+struct DAppEntry {
+    uint32_t dapp_identifier{0};
+    Timestamp registered_time;
+};
+
+/**
+ * @brief Subscription entry representing dApp-RAN function association
+ */
+struct SubscriptionEntry {
+    uint32_t dapp_identifier{0};
+    uint32_t ran_function_id{0};
+    Timestamp created_time;
+};
+
+// Utility functions for type conversions
+
+/**
+ * @brief Convert PduType to string representation
+ */
+[[nodiscard]] inline const char* pdu_type_to_string(PduType type) noexcept {
+    switch (type) {
+        case PduType::SETUP_REQUEST: return "SetupRequest";
+        case PduType::SETUP_RESPONSE: return "SetupResponse";
+        case PduType::SUBSCRIPTION_REQUEST: return "SubscriptionRequest";
+        case PduType::SUBSCRIPTION_RESPONSE: return "SubscriptionResponse";
+        case PduType::INDICATION_MESSAGE: return "IndicationMessage";
+        case PduType::CONTROL_ACTION: return "ControlAction";
+        case PduType::DAPP_REPORT: return "DAppReport";
+        case PduType::XAPP_CONTROL_ACTION: return "XAppControlAction";
+        case PduType::MESSAGE_ACK: return "MessageAck";
+        default: return "Unknown";
+    }
+}
+
+/**
+ * @brief Convert ActionType to string representation
+ */
+[[nodiscard]] inline const char* action_type_to_string(ActionType type) noexcept {
+    switch (type) {
+        case ActionType::INSERT: return "insert";
+        case ActionType::UPDATE: return "update";
+        case ActionType::DELETE: return "delete";
+        default: return "unknown";
+    }
+}
+
+/**
+ * @brief Convert ResponseCode to string representation
+ */
+[[nodiscard]] inline const char* response_code_to_string(ResponseCode code) noexcept {
+    switch (code) {
+        case ResponseCode::POSITIVE: return "positive";
+        case ResponseCode::NEGATIVE: return "negative";
+        default: return "unknown";
+    }
+}
+
+/**
+ * @brief Convert ErrorCode to string representation
+ */
+[[nodiscard]] inline const char* error_code_to_string(ErrorCode code) noexcept {
+    switch (code) {
+        case ErrorCode::SUCCESS: return "Success";
+        case ErrorCode::INVALID_PARAM: return "Invalid parameter";
+        case ErrorCode::NOT_INITIALIZED: return "Not initialized";
+        case ErrorCode::ALREADY_INITIALIZED: return "Already initialized";
+        case ErrorCode::NOT_CONNECTED: return "Not connected";
+        case ErrorCode::CONNECTION_FAILED: return "Connection failed";
+        case ErrorCode::TIMEOUT: return "Timeout";
+        case ErrorCode::ENCODE_FAILED: return "Encode failed";
+        case ErrorCode::DECODE_FAILED: return "Decode failed";
+        case ErrorCode::SM_NOT_FOUND: return "Service Model not found";
+        case ErrorCode::SM_ALREADY_REGISTERED: return "Service Model already registered";
+        case ErrorCode::BUFFER_TOO_SMALL: return "Buffer too small";
+        case ErrorCode::INTERNAL_ERROR: return "Internal error";
+        case ErrorCode::SUBSCRIPTION_EXISTS: return "Subscription already exists";
+        case ErrorCode::SUBSCRIPTION_NOT_FOUND: return "Subscription not found";
+        case ErrorCode::DAPP_NOT_REGISTERED: return "dApp not registered";
+        case ErrorCode::TRANSPORT_ERROR: return "Transport error";
+        case ErrorCode::STATE_ERROR: return "State error";
+        case ErrorCode::SM_START_FAILED: return "Service Model start failed";
+        case ErrorCode::NOT_FOUND: return "Not found";
+        default: return "Unknown error";
+    }
+}
+
+/**
+ * @brief Convert AgentState to string representation
+ */
+[[nodiscard]] inline const char* agent_state_to_string(AgentState state) noexcept {
+    switch (state) {
+        case AgentState::UNINITIALIZED: return "Uninitialized";
+        case AgentState::INITIALIZED: return "Initialized";
+        case AgentState::CONNECTING: return "Connecting";
+        case AgentState::CONNECTED: return "Connected";
+        case AgentState::RUNNING: return "Running";
+        case AgentState::STOPPING: return "Stopping";
+        case AgentState::STOPPED: return "Stopped";
+        case AgentState::ERROR: return "Error";
+        default: return "Unknown";
+    }
+}
+
+} // namespace libe3
+
+#endif // LIBE3_TYPES_HPP
