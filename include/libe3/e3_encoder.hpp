@@ -14,7 +14,7 @@
 #include "types.hpp"
 #include <memory>
 #include <optional>
-#include <expected>
+#include <tl/expected.hpp>
 
 namespace libe3 {
 
@@ -22,7 +22,7 @@ namespace libe3 {
  * @brief Result type for encoding/decoding operations
  */
 template<typename T>
-using EncodeResult = std::expected<T, ErrorCode>;
+using EncodeResult = tl::expected<T, ErrorCode>;
 
 /**
  * @brief Abstract base class for E3AP encoders

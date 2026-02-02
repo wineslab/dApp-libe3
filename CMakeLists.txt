@@ -93,6 +93,34 @@ endif()
 # Required: pthreads
 find_package(Threads REQUIRED)
 
+# Required: nlohmann/json for JSON encoding
+# First try to find installed version
+find_package(nlohmann_json 3.11 QUIET)
+if(NOT nlohmann_json_FOUND)
+    include(FetchContent)
+    FetchContent_Declare(
+        nlohmann_json
+        GIT_REPOSITORY https://github.com/nlohmann/json.git
+        GIT_TAG v3.11.3
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(nlohmann_json)
+    message(STATUS "nlohmann/json: Fetched from GitHub")
+else()
+    message(STATUS "nlohmann/json: Found installed version")
+endif()
+
+# Required: tl::expected for C++17 std::expected-like functionality
+include(FetchContent)
+FetchContent_Declare(
+    tl_expected
+    GIT_REPOSITORY https://github.com/TartanLlama/expected.git
+    GIT_TAG v1.1.0
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(tl_expected)
+message(STATUS "tl::expected: Fetched from GitHub")
+
 # Optional: ZeroMQ
 if(LIBE3_ENABLE_ZMQ)
     find_package(PkgConfig QUIET)
@@ -179,6 +207,8 @@ target_include_directories(libe3
 target_link_libraries(libe3
     PUBLIC
         Threads::Threads
+        nlohmann_json::nlohmann_json
+        tl::expected
     PRIVATE
         libe3_warnings
         libe3_sanitizers
@@ -216,6 +246,8 @@ target_include_directories(libe3_shared
 target_link_libraries(libe3_shared
     PUBLIC
         Threads::Threads
+        nlohmann_json::nlohmann_json
+        tl::expected
     PRIVATE
         libe3_warnings
         libe3_sanitizers

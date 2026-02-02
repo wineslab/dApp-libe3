@@ -2,18 +2,13 @@
  * @file json_encoder.cpp
  * @brief JSON Encoder implementation
  *
- * Ported from the original C implementation's e3ap_handler.c JSON handling.
- * Uses a simple, header-only JSON approach to avoid external dependencies.
- *
  * SPDX-License-Identifier: Apache-2.0
  */
 
 #include "json_encoder.hpp"
 #include "libe3/logger.hpp"
-#include <sstream>
 #include <iomanip>
-#include <algorithm>
-#include <cctype>
+#include <sstream>
 
 namespace libe3 {
 
@@ -21,228 +16,7 @@ namespace {
 
 constexpr const char* LOG_TAG = "JsonEnc";
 
-// Simple JSON builder helper
-class JsonBuilder {
-public:
-    void start_object() { ss_ << '{'; first_ = true; }
-    void end_object() { ss_ << '}'; }
-    void start_array() { ss_ << '['; first_ = true; }
-    void end_array() { ss_ << ']'; }
-    
-    void key(const char* k) {
-        if (!first_) ss_ << ',';
-        first_ = false;
-        ss_ << '"' << k << "\":";
-    }
-    
-    void value_string(const std::string& v) {
-        ss_ << '"';
-        for (char c : v) {
-            switch (c) {
-                case '"': ss_ << "\\\""; break;
-                case '\\': ss_ << "\\\\"; break;
-                case '\n': ss_ << "\\n"; break;
-                case '\r': ss_ << "\\r"; break;
-                case '\t': ss_ << "\\t"; break;
-                default: ss_ << c;
-            }
-        }
-        ss_ << '"';
-    }
-    
-    void value_int(int64_t v) { ss_ << v; }
-    void value_uint(uint64_t v) { ss_ << v; }
-    
-    void value_binary(const std::vector<uint8_t>& data) {
-        // Encode as base64-like hex string for readability
-        ss_ << '"';
-        for (uint8_t b : data) {
-            ss_ << std::hex << std::setfill('0') << std::setw(2) << static_cast<int>(b);
-        }
-        ss_ << '"';
-        ss_ << std::dec;
-    }
-    
-    void array_value_int(int64_t v) {
-        if (!first_) ss_ << ',';
-        first_ = false;
-        ss_ << v;
-    }
-    
-    std::string str() const { return ss_.str(); }
-    
-private:
-    std::ostringstream ss_;
-    bool first_{true};
-};
-
-// Simple JSON parser helper
-class JsonParser {
-public:
-    explicit JsonParser(const std::string& json) : json_(json), pos_(0) {}
-    
-    bool parse_object(std::function<void(const std::string& key)> handler) {
-        skip_whitespace();
-        if (!expect('{')) return false;
-        
-        skip_whitespace();
-        if (peek() == '}') {
-            pos_++;
-            return true;
-        }
-        
-        while (true) {
-            skip_whitespace();
-            std::string key;
-            if (!parse_string(key)) return false;
-            
-            skip_whitespace();
-            if (!expect(':')) return false;
-            
-            handler(key);
-            
-            skip_whitespace();
-            if (peek() == '}') {
-                pos_++;
-                return true;
-            }
-            if (!expect(',')) return false;
-        }
-    }
-    
-    bool parse_string(std::string& out) {
-        skip_whitespace();
-        if (!expect('"')) return false;
-        
-        out.clear();
-        while (pos_ < json_.size() && json_[pos_] != '"') {
-            if (json_[pos_] == '\\' && pos_ + 1 < json_.size()) {
-                pos_++;
-                switch (json_[pos_]) {
-                    case '"': out += '"'; break;
-                    case '\\': out += '\\'; break;
-                    case 'n': out += '\n'; break;
-                    case 'r': out += '\r'; break;
-                    case 't': out += '\t'; break;
-                    default: out += json_[pos_];
-                }
-            } else {
-                out += json_[pos_];
-            }
-            pos_++;
-        }
-        return expect('"');
-    }
-    
-    bool parse_int(int64_t& out) {
-        skip_whitespace();
-        size_t start = pos_;
-        if (pos_ < json_.size() && json_[pos_] == '-') pos_++;
-        while (pos_ < json_.size() && std::isdigit(json_[pos_])) pos_++;
-        if (pos_ == start) return false;
-        out = std::stoll(json_.substr(start, pos_ - start));
-        return true;
-    }
-    
-    bool parse_uint(uint64_t& out) {
-        skip_whitespace();
-        size_t start = pos_;
-        while (pos_ < json_.size() && std::isdigit(json_[pos_])) pos_++;
-        if (pos_ == start) return false;
-        out = std::stoull(json_.substr(start, pos_ - start));
-        return true;
-    }
-    
-    bool parse_array_of_ints(std::vector<uint32_t>& out) {
-        skip_whitespace();
-        if (!expect('[')) return false;
-        
-        out.clear();
-        skip_whitespace();
-        if (peek() == ']') {
-            pos_++;
-            return true;
-        }
-        
-        while (true) {
-            uint64_t val;
-            if (!parse_uint(val)) return false;
-            out.push_back(static_cast<uint32_t>(val));
-            
-            skip_whitespace();
-            if (peek() == ']') {
-                pos_++;
-                return true;
-            }
-            if (!expect(',')) return false;
-        }
-    }
-    
-    bool parse_binary(std::vector<uint8_t>& out) {
-        std::string hex;
-        if (!parse_string(hex)) return false;
-        
-        out.clear();
-        for (size_t i = 0; i + 1 < hex.size(); i += 2) {
-            out.push_back(static_cast<uint8_t>(
-                std::stoi(hex.substr(i, 2), nullptr, 16)));
-        }
-        return true;
-    }
-    
-    void skip_value() {
-        skip_whitespace();
-        char c = peek();
-        if (c == '"') {
-            std::string dummy;
-            parse_string(dummy);
-        } else if (c == '[') {
-            pos_++;
-            int depth = 1;
-            while (pos_ < json_.size() && depth > 0) {
-                if (json_[pos_] == '[') depth++;
-                else if (json_[pos_] == ']') depth--;
-                pos_++;
-            }
-        } else if (c == '{') {
-            pos_++;
-            int depth = 1;
-            while (pos_ < json_.size() && depth > 0) {
-                if (json_[pos_] == '{') depth++;
-                else if (json_[pos_] == '}') depth--;
-                pos_++;
-            }
-        } else {
-            // Number or literal
-            while (pos_ < json_.size() && 
-                   json_[pos_] != ',' && json_[pos_] != '}' && json_[pos_] != ']') {
-                pos_++;
-            }
-        }
-    }
-    
-private:
-    void skip_whitespace() {
-        while (pos_ < json_.size() && std::isspace(json_[pos_])) pos_++;
-    }
-    
-    char peek() const {
-        return pos_ < json_.size() ? json_[pos_] : '\0';
-    }
-    
-    bool expect(char c) {
-        skip_whitespace();
-        if (pos_ < json_.size() && json_[pos_] == c) {
-            pos_++;
-            return true;
-        }
-        return false;
-    }
-    
-    const std::string& json_;
-    size_t pos_;
-};
-
+// Helper to convert PduType string back to enum
 PduType string_to_pdu_type(const std::string& s) {
     if (s == "SetupRequest") return PduType::SETUP_REQUEST;
     if (s == "SetupResponse") return PduType::SETUP_RESPONSE;
@@ -256,109 +30,276 @@ PduType string_to_pdu_type(const std::string& s) {
     return PduType::SETUP_REQUEST; // Default
 }
 
-ActionType string_to_action_type(const std::string& s) {
-    if (s == "insert") return ActionType::INSERT;
-    if (s == "update") return ActionType::UPDATE;
-    if (s == "delete") return ActionType::DELETE;
-    return ActionType::INSERT;
+SetupResult string_to_setup_result(const std::string& s) {
+    if (s == "SUCCESS" || s == "success") return SetupResult::SUCCESS;
+    return SetupResult::FAILURE;
 }
 
-ResponseCode string_to_response_code(const std::string& s) {
-    if (s == "positive") return ResponseCode::POSITIVE;
-    if (s == "negative") return ResponseCode::NEGATIVE;
-    return ResponseCode::NEGATIVE;
+ErrorCode string_to_error_code(const std::string& s) {
+    if (s == "SUCCESS" || s == "success" || s == "Success") return ErrorCode::SUCCESS;
+    if (s == "INVALID_PARAM") return ErrorCode::INVALID_PARAM;
+    if (s == "TIMEOUT" || s == "Timeout") return ErrorCode::TIMEOUT;
+    if (s == "NOT_FOUND" || s == "Not found") return ErrorCode::NOT_FOUND;
+    return ErrorCode::GENERIC_ERROR;
 }
 
 } // anonymous namespace
 
-EncodeResult<EncodedMessage> JsonE3Encoder::encode(const Pdu& pdu) {
-    JsonBuilder json;
-    json.start_object();
+// ============================================================================
+// Binary encoding helpers
+// ============================================================================
+
+std::string JsonE3Encoder::binary_to_hex(const std::vector<uint8_t>& data) {
+    std::ostringstream ss;
+    for (uint8_t b : data) {
+        ss << std::hex << std::setfill('0') << std::setw(2) << static_cast<int>(b);
+    }
+    return ss.str();
+}
+
+std::vector<uint8_t> JsonE3Encoder::hex_to_binary(const std::string& hex) {
+    std::vector<uint8_t> result;
+    result.reserve(hex.size() / 2);
+    for (size_t i = 0; i + 1 < hex.size(); i += 2) {
+        result.push_back(static_cast<uint8_t>(
+            std::stoi(hex.substr(i, 2), nullptr, 16)));
+    }
+    return result;
+}
+
+// ============================================================================
+// Encoding helpers for each PDU type
+// ============================================================================
+
+nlohmann::json JsonE3Encoder::encode_setup_request(const SetupRequest& req) const {
+    nlohmann::json j;
+    j["ran_identifier"] = req.ran_identifier;
+    j["protocol_version"] = req.protocol_version;
     
-    json.key("pdu_type");
-    json.value_string(pdu_type_to_string(pdu.type));
+    nlohmann::json ran_funcs = nlohmann::json::array();
+    for (const auto& rf : req.ran_functions) {
+        ran_funcs.push_back({
+            {"ran_function_id", rf.ran_function_id},
+            {"sm_name", rf.sm_name},
+            {"sm_version", rf.sm_version}
+        });
+    }
+    j["ran_functions"] = ran_funcs;
     
-    json.key("data");
-    json.start_object();
+    return j;
+}
+
+nlohmann::json JsonE3Encoder::encode_setup_response(const SetupResponse& resp) const {
+    nlohmann::json j;
+    j["result"] = (resp.result == SetupResult::SUCCESS) ? "SUCCESS" : "FAILURE";
+    j["accepted_ran_functions"] = resp.accepted_ran_functions;
+    j["rejected_ran_functions"] = resp.rejected_ran_functions;
+    j["message"] = resp.message;
+    return j;
+}
+
+nlohmann::json JsonE3Encoder::encode_subscription_request(const SubscriptionRequest& req) const {
+    nlohmann::json j;
+    j["dapp_identifier"] = req.dapp_identifier;
+    j["ran_functions_to_subscribe"] = req.ran_functions_to_subscribe;
+    j["ran_functions_to_unsubscribe"] = req.ran_functions_to_unsubscribe;
+    return j;
+}
+
+nlohmann::json JsonE3Encoder::encode_subscription_response(const SubscriptionResponse& resp) const {
+    nlohmann::json j;
+    j["dapp_identifier"] = resp.dapp_identifier;
+    j["accepted_ran_functions"] = resp.accepted_ran_functions;
+    j["rejected_ran_functions"] = resp.rejected_ran_functions;
+    return j;
+}
+
+nlohmann::json JsonE3Encoder::encode_indication_message(const IndicationMessage& msg) const {
+    nlohmann::json j;
+    j["dapp_identifier"] = msg.dapp_identifier;
+    j["protocol_data"] = binary_to_hex(msg.protocol_data);
+    return j;
+}
+
+nlohmann::json JsonE3Encoder::encode_control_action(const ControlAction& action) const {
+    nlohmann::json j;
+    j["dapp_identifier"] = action.dapp_identifier;
+    j["ran_function_identifier"] = action.ran_function_identifier;
+    j["action_data"] = binary_to_hex(action.action_data);
+    return j;
+}
+
+nlohmann::json JsonE3Encoder::encode_dapp_report(const DAppReport& report) const {
+    nlohmann::json j;
+    j["dapp_identifier"] = report.dapp_identifier;
+    j["ran_function_identifier"] = report.ran_function_identifier;
+    j["report_data"] = binary_to_hex(report.report_data);
+    return j;
+}
+
+nlohmann::json JsonE3Encoder::encode_xapp_control_action(const XAppControlAction& action) const {
+    nlohmann::json j;
+    j["dapp_identifier"] = action.dapp_identifier;
+    j["ran_function_identifier"] = action.ran_function_identifier;
+    j["xapp_control_data"] = binary_to_hex(action.xapp_control_data);
+    return j;
+}
+
+nlohmann::json JsonE3Encoder::encode_message_ack(const MessageAck& ack) const {
+    nlohmann::json j;
+    j["original_message_id"] = ack.original_message_id;
+    j["result"] = error_code_to_string(ack.result);
+    j["message"] = ack.message;
+    return j;
+}
+
+// ============================================================================
+// Decoding helpers for each PDU type
+// ============================================================================
+
+SetupRequest JsonE3Encoder::decode_setup_request(const nlohmann::json& j) const {
+    SetupRequest req;
+    req.ran_identifier = j.value("ran_identifier", "");
+    req.protocol_version = j.value("protocol_version", LIBE3_PROTOCOL_VERSION);
     
-    std::visit([&json](auto&& arg) {
-        using T = std::decay_t<decltype(arg)>;
-        
-        if constexpr (std::is_same_v<T, SetupRequest>) {
-            json.key("id"); json.value_uint(arg.id);
-            json.key("dapp_identifier"); json.value_uint(arg.dapp_identifier);
-            json.key("action_type"); json.value_string(action_type_to_string(arg.type));
-            json.key("ran_function_list");
-            json.start_array();
-            for (uint32_t rf : arg.ran_function_list) {
-                json.array_value_int(rf);
-            }
-            json.end_array();
+    if (j.contains("ran_functions") && j["ran_functions"].is_array()) {
+        for (const auto& rf : j["ran_functions"]) {
+            RanFunctionDefinition def;
+            def.ran_function_id = rf.value("ran_function_id", 0u);
+            def.sm_name = rf.value("sm_name", "");
+            def.sm_version = rf.value("sm_version", "");
+            req.ran_functions.push_back(def);
         }
-        else if constexpr (std::is_same_v<T, SetupResponse>) {
-            json.key("id"); json.value_uint(arg.id);
-            json.key("request_id"); json.value_uint(arg.request_id);
-            json.key("response_code"); json.value_string(response_code_to_string(arg.response_code));
-            json.key("ran_function_list");
-            json.start_array();
-            for (uint32_t rf : arg.ran_function_list) {
-                json.array_value_int(rf);
-            }
-            json.end_array();
-        }
-        else if constexpr (std::is_same_v<T, SubscriptionRequest>) {
-            json.key("id"); json.value_uint(arg.id);
-            json.key("dapp_identifier"); json.value_uint(arg.dapp_identifier);
-            json.key("action_type"); json.value_string(action_type_to_string(arg.type));
-            json.key("ran_function_identifier"); json.value_uint(arg.ran_function_identifier);
-        }
-        else if constexpr (std::is_same_v<T, SubscriptionResponse>) {
-            json.key("id"); json.value_uint(arg.id);
-            json.key("request_id"); json.value_uint(arg.request_id);
-            json.key("response_code"); json.value_string(response_code_to_string(arg.response_code));
-        }
-        else if constexpr (std::is_same_v<T, IndicationMessage>) {
-            json.key("id"); json.value_uint(arg.id);
-            json.key("dapp_identifier"); json.value_uint(arg.dapp_identifier);
-            json.key("protocol_data"); json.value_binary(arg.protocol_data);
-        }
-        else if constexpr (std::is_same_v<T, ControlAction>) {
-            json.key("id"); json.value_uint(arg.id);
-            json.key("dapp_identifier"); json.value_uint(arg.dapp_identifier);
-            json.key("ran_function_identifier"); json.value_uint(arg.ran_function_identifier);
-            json.key("action_data"); json.value_binary(arg.action_data);
-        }
-        else if constexpr (std::is_same_v<T, DAppReport>) {
-            json.key("id"); json.value_uint(arg.id);
-            json.key("dapp_identifier"); json.value_uint(arg.dapp_identifier);
-            json.key("ran_function_identifier"); json.value_uint(arg.ran_function_identifier);
-            json.key("report_data"); json.value_binary(arg.report_data);
-        }
-        else if constexpr (std::is_same_v<T, XAppControlAction>) {
-            json.key("id"); json.value_uint(arg.id);
-            json.key("dapp_identifier"); json.value_uint(arg.dapp_identifier);
-            json.key("ran_function_identifier"); json.value_uint(arg.ran_function_identifier);
-            json.key("xapp_control_data"); json.value_binary(arg.xapp_control_data);
-        }
-        else if constexpr (std::is_same_v<T, MessageAck>) {
-            json.key("id"); json.value_uint(arg.id);
-            json.key("request_id"); json.value_uint(arg.request_id);
-            json.key("response_code"); json.value_string(response_code_to_string(arg.response_code));
-        }
-    }, pdu.choice);
+    }
     
-    json.end_object(); // data
-    json.end_object(); // root
-    
-    std::string json_str = json.str();
-    EncodedMessage msg;
-    msg.buffer.assign(json_str.begin(), json_str.end());
-    msg.format = EncodingFormat::JSON;
-    
-    E3_LOG_TRACE(LOG_TAG) << "Encoded " << pdu_type_to_string(pdu.type) 
-                          << " (" << msg.size() << " bytes)";
-    
+    return req;
+}
+
+SetupResponse JsonE3Encoder::decode_setup_response(const nlohmann::json& j) const {
+    SetupResponse resp;
+    resp.result = string_to_setup_result(j.value("result", "FAILURE"));
+    resp.accepted_ran_functions = j.value("accepted_ran_functions", std::vector<uint32_t>{});
+    resp.rejected_ran_functions = j.value("rejected_ran_functions", std::vector<uint32_t>{});
+    resp.message = j.value("message", "");
+    return resp;
+}
+
+SubscriptionRequest JsonE3Encoder::decode_subscription_request(const nlohmann::json& j) const {
+    SubscriptionRequest req;
+    req.dapp_identifier = j.value("dapp_identifier", 0u);
+    req.ran_functions_to_subscribe = j.value("ran_functions_to_subscribe", std::vector<uint32_t>{});
+    req.ran_functions_to_unsubscribe = j.value("ran_functions_to_unsubscribe", std::vector<uint32_t>{});
+    return req;
+}
+
+SubscriptionResponse JsonE3Encoder::decode_subscription_response(const nlohmann::json& j) const {
+    SubscriptionResponse resp;
+    resp.dapp_identifier = j.value("dapp_identifier", 0u);
+    resp.accepted_ran_functions = j.value("accepted_ran_functions", std::vector<uint32_t>{});
+    resp.rejected_ran_functions = j.value("rejected_ran_functions", std::vector<uint32_t>{});
+    return resp;
+}
+
+IndicationMessage JsonE3Encoder::decode_indication_message(const nlohmann::json& j) const {
+    IndicationMessage msg;
+    msg.dapp_identifier = j.value("dapp_identifier", 0u);
+    msg.protocol_data = hex_to_binary(j.value("protocol_data", ""));
     return msg;
+}
+
+ControlAction JsonE3Encoder::decode_control_action(const nlohmann::json& j) const {
+    ControlAction action;
+    action.dapp_identifier = j.value("dapp_identifier", 0u);
+    action.ran_function_identifier = j.value("ran_function_identifier", 0u);
+    action.action_data = hex_to_binary(j.value("action_data", ""));
+    return action;
+}
+
+DAppReport JsonE3Encoder::decode_dapp_report(const nlohmann::json& j) const {
+    DAppReport report;
+    report.dapp_identifier = j.value("dapp_identifier", 0u);
+    report.ran_function_identifier = j.value("ran_function_identifier", 0u);
+    report.report_data = hex_to_binary(j.value("report_data", ""));
+    return report;
+}
+
+XAppControlAction JsonE3Encoder::decode_xapp_control_action(const nlohmann::json& j) const {
+    XAppControlAction action;
+    action.dapp_identifier = j.value("dapp_identifier", 0u);
+    action.ran_function_identifier = j.value("ran_function_identifier", 0u);
+    action.xapp_control_data = hex_to_binary(j.value("xapp_control_data", ""));
+    return action;
+}
+
+MessageAck JsonE3Encoder::decode_message_ack(const nlohmann::json& j) const {
+    MessageAck ack;
+    ack.original_message_id = j.value("original_message_id", 0u);
+    ack.result = string_to_error_code(j.value("result", "SUCCESS"));
+    ack.message = j.value("message", "");
+    return ack;
+}
+
+// ============================================================================
+// Main encode/decode methods
+// ============================================================================
+
+EncodeResult<EncodedMessage> JsonE3Encoder::encode(const Pdu& pdu) {
+    try {
+        nlohmann::json root;
+        root["pdu_type"] = pdu_type_to_string(pdu.type);
+        root["message_id"] = pdu.message_id;
+        root["timestamp"] = pdu.timestamp;
+        
+        // Encode the data based on PDU type
+        nlohmann::json data;
+        std::visit([this, &data](auto&& arg) {
+            using T = std::decay_t<decltype(arg)>;
+            
+            if constexpr (std::is_same_v<T, SetupRequest>) {
+                data = encode_setup_request(arg);
+            }
+            else if constexpr (std::is_same_v<T, SetupResponse>) {
+                data = encode_setup_response(arg);
+            }
+            else if constexpr (std::is_same_v<T, SubscriptionRequest>) {
+                data = encode_subscription_request(arg);
+            }
+            else if constexpr (std::is_same_v<T, SubscriptionResponse>) {
+                data = encode_subscription_response(arg);
+            }
+            else if constexpr (std::is_same_v<T, IndicationMessage>) {
+                data = encode_indication_message(arg);
+            }
+            else if constexpr (std::is_same_v<T, ControlAction>) {
+                data = encode_control_action(arg);
+            }
+            else if constexpr (std::is_same_v<T, DAppReport>) {
+                data = encode_dapp_report(arg);
+            }
+            else if constexpr (std::is_same_v<T, XAppControlAction>) {
+                data = encode_xapp_control_action(arg);
+            }
+            else if constexpr (std::is_same_v<T, MessageAck>) {
+                data = encode_message_ack(arg);
+            }
+        }, pdu.choice);
+        
+        root["data"] = data;
+        
+        std::string json_str = root.dump();
+        EncodedMessage msg;
+        msg.buffer.assign(json_str.begin(), json_str.end());
+        msg.format = EncodingFormat::JSON;
+        
+        E3_LOG_TRACE(LOG_TAG) << "Encoded " << pdu_type_to_string(pdu.type) 
+                              << " (" << msg.size() << " bytes)";
+        
+        return msg;
+    }
+    catch (const std::exception& e) {
+        E3_LOG_ERROR(LOG_TAG) << "JSON encode error: " << e.what();
+        return tl::unexpected(ErrorCode::ENCODE_FAILED);
+    }
 }
 
 EncodeResult<Pdu> JsonE3Encoder::decode(const EncodedMessage& encoded) {
@@ -366,173 +307,79 @@ EncodeResult<Pdu> JsonE3Encoder::decode(const EncodedMessage& encoded) {
 }
 
 EncodeResult<Pdu> JsonE3Encoder::decode(const uint8_t* data, size_t size) {
-    std::string json_str(reinterpret_cast<const char*>(data), size);
-    
-    E3_LOG_TRACE(LOG_TAG) << "Decoding JSON: " << json_str.substr(0, 100) << "...";
-    
-    JsonParser parser(json_str);
-    
-    Pdu pdu;
-    std::string pdu_type_str;
-    bool has_pdu_type = false;
-    bool has_data = false;
-    
-    bool success = parser.parse_object([&](const std::string& key) {
-        if (key == "pdu_type") {
-            parser.parse_string(pdu_type_str);
-            pdu.type = string_to_pdu_type(pdu_type_str);
-            has_pdu_type = true;
-        }
-        else if (key == "data") {
-            has_data = true;
-            
-            // Parse data object based on PDU type
-            parser.parse_object([&](const std::string& data_key) {
-                switch (pdu.type) {
-                    case PduType::SETUP_REQUEST: {
-                        auto& req = pdu.choice.emplace<SetupRequest>();
-                        if (data_key == "id") {
-                            uint64_t val; parser.parse_uint(val); req.id = static_cast<uint32_t>(val);
-                        } else if (data_key == "dapp_identifier") {
-                            uint64_t val; parser.parse_uint(val); req.dapp_identifier = static_cast<uint32_t>(val);
-                        } else if (data_key == "action_type") {
-                            std::string s; parser.parse_string(s); req.type = string_to_action_type(s);
-                        } else if (data_key == "ran_function_list") {
-                            parser.parse_array_of_ints(req.ran_function_list);
-                        } else {
-                            parser.skip_value();
-                        }
-                        break;
-                    }
-                    case PduType::SETUP_RESPONSE: {
-                        auto& resp = pdu.choice.emplace<SetupResponse>();
-                        if (data_key == "id") {
-                            uint64_t val; parser.parse_uint(val); resp.id = static_cast<uint32_t>(val);
-                        } else if (data_key == "request_id") {
-                            uint64_t val; parser.parse_uint(val); resp.request_id = static_cast<uint32_t>(val);
-                        } else if (data_key == "response_code") {
-                            std::string s; parser.parse_string(s); resp.response_code = string_to_response_code(s);
-                        } else if (data_key == "ran_function_list") {
-                            parser.parse_array_of_ints(resp.ran_function_list);
-                        } else {
-                            parser.skip_value();
-                        }
-                        break;
-                    }
-                    case PduType::SUBSCRIPTION_REQUEST: {
-                        auto& req = pdu.choice.emplace<SubscriptionRequest>();
-                        if (data_key == "id") {
-                            uint64_t val; parser.parse_uint(val); req.id = static_cast<uint32_t>(val);
-                        } else if (data_key == "dapp_identifier") {
-                            uint64_t val; parser.parse_uint(val); req.dapp_identifier = static_cast<uint32_t>(val);
-                        } else if (data_key == "action_type") {
-                            std::string s; parser.parse_string(s); req.type = string_to_action_type(s);
-                        } else if (data_key == "ran_function_identifier") {
-                            uint64_t val; parser.parse_uint(val); req.ran_function_identifier = static_cast<uint32_t>(val);
-                        } else {
-                            parser.skip_value();
-                        }
-                        break;
-                    }
-                    case PduType::SUBSCRIPTION_RESPONSE: {
-                        auto& resp = pdu.choice.emplace<SubscriptionResponse>();
-                        if (data_key == "id") {
-                            uint64_t val; parser.parse_uint(val); resp.id = static_cast<uint32_t>(val);
-                        } else if (data_key == "request_id") {
-                            uint64_t val; parser.parse_uint(val); resp.request_id = static_cast<uint32_t>(val);
-                        } else if (data_key == "response_code") {
-                            std::string s; parser.parse_string(s); resp.response_code = string_to_response_code(s);
-                        } else {
-                            parser.skip_value();
-                        }
-                        break;
-                    }
-                    case PduType::INDICATION_MESSAGE: {
-                        auto& msg = pdu.choice.emplace<IndicationMessage>();
-                        if (data_key == "id") {
-                            uint64_t val; parser.parse_uint(val); msg.id = static_cast<uint32_t>(val);
-                        } else if (data_key == "dapp_identifier") {
-                            uint64_t val; parser.parse_uint(val); msg.dapp_identifier = static_cast<uint32_t>(val);
-                        } else if (data_key == "protocol_data") {
-                            parser.parse_binary(msg.protocol_data);
-                        } else {
-                            parser.skip_value();
-                        }
-                        break;
-                    }
-                    case PduType::CONTROL_ACTION: {
-                        auto& action = pdu.choice.emplace<ControlAction>();
-                        if (data_key == "id") {
-                            uint64_t val; parser.parse_uint(val); action.id = static_cast<uint32_t>(val);
-                        } else if (data_key == "dapp_identifier") {
-                            uint64_t val; parser.parse_uint(val); action.dapp_identifier = static_cast<uint32_t>(val);
-                        } else if (data_key == "ran_function_identifier") {
-                            uint64_t val; parser.parse_uint(val); action.ran_function_identifier = static_cast<uint32_t>(val);
-                        } else if (data_key == "action_data") {
-                            parser.parse_binary(action.action_data);
-                        } else {
-                            parser.skip_value();
-                        }
-                        break;
-                    }
-                    case PduType::DAPP_REPORT: {
-                        auto& report = pdu.choice.emplace<DAppReport>();
-                        if (data_key == "id") {
-                            uint64_t val; parser.parse_uint(val); report.id = static_cast<uint32_t>(val);
-                        } else if (data_key == "dapp_identifier") {
-                            uint64_t val; parser.parse_uint(val); report.dapp_identifier = static_cast<uint32_t>(val);
-                        } else if (data_key == "ran_function_identifier") {
-                            uint64_t val; parser.parse_uint(val); report.ran_function_identifier = static_cast<uint32_t>(val);
-                        } else if (data_key == "report_data") {
-                            parser.parse_binary(report.report_data);
-                        } else {
-                            parser.skip_value();
-                        }
-                        break;
-                    }
-                    case PduType::XAPP_CONTROL_ACTION: {
-                        auto& action = pdu.choice.emplace<XAppControlAction>();
-                        if (data_key == "id") {
-                            uint64_t val; parser.parse_uint(val); action.id = static_cast<uint32_t>(val);
-                        } else if (data_key == "dapp_identifier") {
-                            uint64_t val; parser.parse_uint(val); action.dapp_identifier = static_cast<uint32_t>(val);
-                        } else if (data_key == "ran_function_identifier") {
-                            uint64_t val; parser.parse_uint(val); action.ran_function_identifier = static_cast<uint32_t>(val);
-                        } else if (data_key == "xapp_control_data") {
-                            parser.parse_binary(action.xapp_control_data);
-                        } else {
-                            parser.skip_value();
-                        }
-                        break;
-                    }
-                    case PduType::MESSAGE_ACK: {
-                        auto& ack = pdu.choice.emplace<MessageAck>();
-                        if (data_key == "id") {
-                            uint64_t val; parser.parse_uint(val); ack.id = static_cast<uint32_t>(val);
-                        } else if (data_key == "request_id") {
-                            uint64_t val; parser.parse_uint(val); ack.request_id = static_cast<uint32_t>(val);
-                        } else if (data_key == "response_code") {
-                            std::string s; parser.parse_string(s); ack.response_code = string_to_response_code(s);
-                        } else {
-                            parser.skip_value();
-                        }
-                        break;
-                    }
-                }
-            });
-        }
-        else {
-            parser.skip_value();
-        }
-    });
-    
-    if (!success || !has_pdu_type || !has_data) {
-        E3_LOG_ERROR(LOG_TAG) << "Failed to decode JSON PDU";
-        return std::unexpected(ErrorCode::DECODE_FAILED);
+    if (data == nullptr || size == 0) {
+        E3_LOG_ERROR(LOG_TAG) << "Cannot decode empty data";
+        return tl::unexpected(ErrorCode::DECODE_FAILED);
     }
     
-    E3_LOG_TRACE(LOG_TAG) << "Decoded " << pdu_type_to_string(pdu.type);
-    return pdu;
+    try {
+        std::string json_str(reinterpret_cast<const char*>(data), size);
+        
+        E3_LOG_TRACE(LOG_TAG) << "Decoding JSON (" << size << " bytes)";
+        
+        nlohmann::json root = nlohmann::json::parse(json_str);
+        
+        Pdu pdu;
+        
+        // Get PDU type
+        std::string pdu_type_str = root.value("pdu_type", "");
+        pdu.type = string_to_pdu_type(pdu_type_str);
+        pdu.message_id = root.value("message_id", 0u);
+        pdu.timestamp = root.value("timestamp", 0ull);
+        
+        // Get data object
+        if (!root.contains("data")) {
+            E3_LOG_ERROR(LOG_TAG) << "Missing 'data' field in JSON";
+            return tl::unexpected(ErrorCode::DECODE_FAILED);
+        }
+        
+        const nlohmann::json& j = root["data"];
+        
+        // Decode based on PDU type
+        switch (pdu.type) {
+            case PduType::SETUP_REQUEST:
+                pdu.choice = decode_setup_request(j);
+                break;
+            case PduType::SETUP_RESPONSE:
+                pdu.choice = decode_setup_response(j);
+                break;
+            case PduType::SUBSCRIPTION_REQUEST:
+                pdu.choice = decode_subscription_request(j);
+                break;
+            case PduType::SUBSCRIPTION_RESPONSE:
+                pdu.choice = decode_subscription_response(j);
+                break;
+            case PduType::INDICATION_MESSAGE:
+                pdu.choice = decode_indication_message(j);
+                break;
+            case PduType::CONTROL_ACTION:
+                pdu.choice = decode_control_action(j);
+                break;
+            case PduType::DAPP_REPORT:
+                pdu.choice = decode_dapp_report(j);
+                break;
+            case PduType::XAPP_CONTROL_ACTION:
+                pdu.choice = decode_xapp_control_action(j);
+                break;
+            case PduType::MESSAGE_ACK:
+                pdu.choice = decode_message_ack(j);
+                break;
+            default:
+                E3_LOG_ERROR(LOG_TAG) << "Unknown PDU type: " << pdu_type_str;
+                return tl::unexpected(ErrorCode::DECODE_FAILED);
+        }
+        
+        E3_LOG_TRACE(LOG_TAG) << "Decoded " << pdu_type_to_string(pdu.type);
+        return pdu;
+    }
+    catch (const nlohmann::json::parse_error& e) {
+        E3_LOG_ERROR(LOG_TAG) << "JSON parse error: " << e.what();
+        return tl::unexpected(ErrorCode::DECODE_FAILED);
+    }
+    catch (const std::exception& e) {
+        E3_LOG_ERROR(LOG_TAG) << "JSON decode error: " << e.what();
+        return tl::unexpected(ErrorCode::DECODE_FAILED);
+    }
 }
 
 } // namespace libe3
